@@ -2110,32 +2110,143 @@ PY
   hdr "Auto-test result"
   cat "$RESULTFILE"
   echo
-  if [[ -n "$best_name" ]]; then
-    local rate_txt="throughput not measured"
-    [[ "$best_rate" =~ ^[0-9.]+$ ]] && rate_txt="~${best_rate} Mbit/s"
-    msg "Best variant: ${BOLD}${best_name}${N} (loss ${best_loss}%, ${rate_txt})"
-    if ask_yn "Apply '${best_name}' to BOTH servers now" "Y"; then
-      # Apply the winning OVERRIDES onto EACH end's own pre-test base — never copy one end's
-      # whole config to the other, which would clobber the role/listen/peer/IPs and blackhole
-      # the tunnel. This is the same per-end merge the sweep used.
-      autotest_merge "${CONF}.autotest.bak" "$best_over" "$CONF"
-      $RSSH "$(autotest_merge_remote_cmd "${RCONF}.autotest.bak" "$best_over" "$RCONF")" >/dev/null 2>&1
-      chmod 600 "$CONF"; $RSSH "chmod 600 $RCONF" >/dev/null 2>&1
-      $RSSH 'systemctl restart aestun' >/dev/null 2>&1; systemctl restart aestun >/dev/null 2>&1
-      msg "Applied. The tunnel is now running: ${best_name}."
-      echo "Enabled: $(jq -c '{transport,obfs,desync:.desync.enabled,split:.split.enabled,junk:.junk.enabled,hop:.hop.enabled,tcp_rotate:.tcp_rotate.enabled}' "$CONF")"
-    else
-      cp "${CONF}.autotest.bak" "$CONF"; $RSSH "cp ${RCONF}.autotest.bak $RCONF" >/dev/null 2>&1
-      $RSSH 'systemctl restart aestun' >/dev/null 2>&1; systemctl restart aestun >/dev/null 2>&1
-      warn "Reverted to the pre-test config on both ends."
-    fi
+
+  # User manually selects the variant to apply.
+  echo
+  msg "Select the variant to apply to BOTH servers:"
+  echo
+  echo "  1) baseline"
+  echo "  2) quic-v1"
+  echo "  3) dtls"
+  echo "  4) desync+split+junk"
+  echo "  5) port-hop"
+  echo "  6) tcp+tls"
+  echo "  7) tcp+tls+rotate"
+  echo "  8) icmp"
+  echo "  9) icmp+desync"
+  echo
+
+  while true; do
+    read -r -p "Enter variant name or number (1-9): " selected
+
+    case "$selected" in
+      1|baseline)
+        selected_name="baseline"
+        ;;
+      2|quic-v1)
+        selected_name="quic-v1"
+        ;;
+      3|dtls)
+        selected_name="dtls"
+        ;;
+      4|desync+split+junk)
+        selected_name="desync+split+junk"
+        ;;
+      5|port-hop)
+        selected_name="port-hop"
+        ;;
+      6|tcp+tls)
+        selected_name="tcp+tls"
+        ;;
+      7|tcp+tls+rotate)
+        selected_name="tcp+tls+rotate"
+        ;;
+      8|icmp)
+        selected_name="icmp"
+        ;;
+      9|icmp+desync)
+        selected_name="icmp+desync"
+        ;;
+      *)
+        warn "Invalid selection. Choose 1-9 or type the exact variant name."
+        continue
+        ;;
+    esac
+
+    break
+  done
+
+  echo
+  msg "Selected variant: ${BOLD}${selected_name}${N}"
+  echo
+
+  if ask_yn "Apply '${selected_name}' to BOTH servers now" "Y"; then
+    # Find the OVERRIDES belonging to the selected variant.
+    selected_over=""
+
+    case "$selected_name" in
+      baseline)
+        selected_over='{}'
+        ;;
+      quic-v1)
+        selected_over='{"transport":"udp","obfs":"quic"}'
+        ;;
+      dtls)
+        selected_over='{"transport":"udp","obfs":"dtls"}'
+        ;;
+      desync+split+junk)
+        selected_over='{"transport":"udp","desync":{"enabled":true},"split":{"enabled":true},"junk":{"enabled":true}}'
+        ;;
+      port-hop)
+        selected_over='{"transport":"udp","hop":{"enabled":true}}'
+        ;;
+      tcp+tls)
+        selected_over='{"transport":"tcp","obfs":"quic"}'
+        ;;
+      tcp+tls+rotate)
+        selected_over='{"transport":"tcp","obfs":"quic","tcp_rotate":{"enabled":true}}'
+        ;;
+      icmp)
+        selected_over='{"transport":"icmp"}'
+        ;;
+      icmp+desync)
+        selected_over='{"transport":"icmp","desync":{"enabled":true}}'
+        ;;
+    esac
+
+    # Apply the selected OVERRIDES onto EACH end's own pre-test base.
+    # Never copy one server's whole config to the other.
+    autotest_merge "${CONF}.autotest.bak" "$selected_over" "$CONF"
+
+    $RSSH "$(autotest_merge_remote_cmd \
+      "${RCONF}.autotest.bak" \
+      "$selected_over" \
+      "$RCONF")" >/dev/null 2>&1
+
+    chmod 600 "$CONF"
+    $RSSH "chmod 600 $RCONF" >/dev/null 2>&1
+
+    $RSSH 'systemctl restart aestun' >/dev/null 2>&1
+    systemctl restart aestun >/dev/null 2>&1
+
+    msg "Applied. The tunnel is now running: ${selected_name}."
+
+    echo
+    echo "Enabled:"
+    jq -c '{
+      transport,
+      obfs,
+      desync:.desync.enabled,
+      split:.split.enabled,
+      junk:.junk.enabled,
+      hop:.hop.enabled,
+      tcp_rotate:.tcp_rotate.enabled,
+      icmp:.icmp
+    }' "$CONF"
+
   else
-    err "No variant came up cleanly; reverting."
-    cp "${CONF}.autotest.bak" "$CONF"; $RSSH "cp ${RCONF}.autotest.bak $RCONF" >/dev/null 2>&1
-    $RSSH 'systemctl restart aestun' >/dev/null 2>&1; systemctl restart aestun >/dev/null 2>&1
+    cp "${CONF}.autotest.bak" "$CONF"
+    $RSSH "cp ${RCONF}.autotest.bak $RCONF" >/dev/null 2>&1
+
+    $RSSH 'systemctl restart aestun' >/dev/null 2>&1
+    systemctl restart aestun >/dev/null 2>&1
+
+    warn "Reverted to the pre-test config on both ends."
   fi
+
   shred -u "$pwf" 2>/dev/null || rm -f "$pwf"
   rm -f "${CONF}.try" "${CONF}.best" "$RESULTFILE"
+
   pause
 }
 

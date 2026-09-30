@@ -823,17 +823,25 @@ func cpuModel() string {
 // v4 peer compares equal to the v4-mapped form a dual-stack socket reports.
 func setPeerFromConfig(cfg *Config, t *Tunnel) {
 	if cfg.Peer == "" {
+		// No peer configured. The authenticated receive path will
+		// learn it from the source address.
+		t.peerConfigured.Store(false)
 		return
 	}
+
 	paddr, err := net.ResolveUDPAddr("udp", cfg.Peer)
 	if err != nil {
 		log.Fatalf("invalid peer: %v", err)
 	}
+
 	ap, ok := netip.AddrFromSlice(paddr.IP)
 	if !ok {
 		log.Fatalf("invalid peer address: %s", cfg.Peer)
 	}
+
+	// A configured peer is authoritative.
 	t.setPeer(netip.AddrPortFrom(ap.Unmap(), uint16(paddr.Port)))
+	t.peerConfigured.Store(true)
 }
 
 // startDesync launches the native fake injector once the peer address is known (role b may

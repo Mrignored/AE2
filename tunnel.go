@@ -577,6 +577,9 @@ type Tunnel struct {
 	// that produces one allocates it fresh per datagram. netip.AddrPort is comparable,
 	// allocation-free, and reduces the whole check to a load and an equality test.
 	peer atomic.Pointer[netip.AddrPort]
+	// peerConfigured is true when the peer came explicitly from config.
+    // A configured peer is authoritative and must never be replaced by roaming.
+    peerConfigured atomic.Bool
 
 	// DPI / probe observer; never nil (a disabled one is a no-op).
 	dpi *dpiLogger
@@ -963,11 +966,19 @@ func (t *Tunnel) samePeer(src netip.AddrPort) bool {
 }
 
 func (t *Tunnel) maybeRoam(src netip.AddrPort) {
+	// If peer was explicitly configured, it is authoritative.
+	// Never replace it with the source address of an incoming packet.
+	if t.peerConfigured.Load() {
+		return
+	}
+
+	// No configured peer: learn the peer from authenticated traffic.
 	p := t.peer.Load()
+
 	if p != nil {
 		if t.hopMode {
-			// Same host, different port each epoch — expected, not a roam. Keep the stored
-			// port in step (so getPeer stays current for any non-hopping consumer) silently.
+			// With port hopping, the IP identifies the peer and
+			// the port is expected to change.
 			if p.Addr() == src.Addr() {
 				if *p != src {
 					t.setPeer(src)
@@ -978,10 +989,12 @@ func (t *Tunnel) maybeRoam(src netip.AddrPort) {
 			return
 		}
 	}
+
 	old := ""
 	if p != nil {
 		old = p.String()
 	}
+
 	t.setPeer(src)
 	t.dpi.peerRoamed(old, src.String())
 }

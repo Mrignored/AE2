@@ -847,16 +847,22 @@ func startICMPDesync(cfg *Config, t *Tunnel, c *icmpCarrier) {
 // drop the port rather than rejecting a config that is only cosmetically wrong.
 func setICMPPeerFromConfig(cfg *Config, t *Tunnel) {
 	if cfg.Peer == "" {
+		// No peer configured.
+		// The first authenticated incoming packet will establish the peer.
+		t.peerConfigured.Store(false)
 		return
 	}
+
 	host := cfg.Peer
 	if h, _, err := net.SplitHostPort(cfg.Peer); err == nil {
 		host = h
 	}
+
 	ips, err := net.LookupIP(host)
 	if err != nil || len(ips) == 0 {
 		log.Fatalf("invalid peer %q: %v", cfg.Peer, err)
 	}
+
 	var v4 net.IP
 	for _, ip := range ips {
 		if ip4 := ip.To4(); ip4 != nil {
@@ -864,11 +870,17 @@ func setICMPPeerFromConfig(cfg *Config, t *Tunnel) {
 			break
 		}
 	}
+
 	if v4 == nil {
 		log.Fatalf("peer %q has no IPv4 address; the ICMP carrier is IPv4-only", cfg.Peer)
 	}
+
 	addr, _ := netip.AddrFromSlice(v4)
+
+	// Configured peer is authoritative.
+	// ICMP has no port, so port 0 is intentional.
 	t.setPeer(netip.AddrPortFrom(addr.Unmap(), 0))
+	t.peerConfigured.Store(true)
 }
 
 func runICMP(cfg *Config, t *Tunnel, tuns []*os.File) {
